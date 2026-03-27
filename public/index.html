@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Target Calculator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; }
+        .custom-input {
+            background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(71, 85, 105, 0.5);
+            color: white; border-radius: 6px; padding: 10px 14px; width: 100%; outline: none; transition: all 0.2s;
+        }
+        .custom-input:focus { border-color: #38bdf8; box-shadow: 0 0 8px rgba(56, 189, 248, 0.2); }
+        .toggle-container { display: flex; background: #0f172a; border-radius: 6px; border: 1px solid #334155; overflow: hidden; }
+        .toggle-btn { flex: 1; padding: 8px 0; text-align: center; font-size: 0.75rem; font-weight: 800; cursor: pointer; transition: all 0.2s; color: #64748b; }
+        .toggle-btn.active-long { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+        .toggle-btn.active-short { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        .delete-btn { transition: all 0.2s; cursor: pointer; }
+        .delete-btn:hover { color: #f87171; background: rgba(239, 68, 68, 0.1); border-radius: 4px; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-5xl mx-auto">
+        <div class="mb-8 border-b border-slate-700 pb-4">
+            <h1 class="text-2xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
+                Institutional Position Calculator
+            </h1>
+            <p class="text-slate-400 text-xs mt-1">Real-time target mapping synced to Cloud Database.</p>
+        </div>
+
+        <div class="card p-5 mb-8 shadow-lg">
+            <h2 class="text-sm font-bold text-white mb-4 flex items-center gap-2">
+                <span>⚙️</span> Add New Setup
+            </h2>
+            <div class="flex flex-col md:flex-row gap-4 items-end">
+                <div class="w-full md:w-1/3">
+                    <label class="text-[0.65rem] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Symbol</label>
+                    <input type="text" id="addSymbol" class="custom-input uppercase font-mono" placeholder="e.g., BTCUSD">
+                </div>
+                <div class="w-full md:w-1/3">
+                    <label class="text-[0.65rem] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Fixed Value Offset</label>
+                    <input type="number" id="addValue" step="any" class="custom-input font-mono" placeholder="e.g., 100">
+                </div>
+                <div class="w-full md:w-1/3">
+                    <button onclick="injectCoin()" id="addBtn" class="w-full py-2.5 rounded bg-sky-500/20 border border-sky-500/50 text-sky-400 text-sm font-bold hover:bg-sky-500/40 transition h-[42px]">
+                        SAVE TO DATABASE
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="calcGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            <p class="text-slate-500 italic text-sm">Loading Database...</p>
+        </div>
+    </div>
+
+    <script>
+        let activeCoins = [];
+
+        // 1. BOOT: Fetch data from Server
+        async function fetchDatabase() {
+            try {
+                const response = await fetch('/api/targets');
+                activeCoins = await response.json();
+                renderGrid();
+            } catch (err) {
+                console.error("Failed to load DB:", err);
+            }
+        }
+
+        // 2. ADD TO DATABASE
+        async function injectCoin() {
+            const symbolInput = document.getElementById('addSymbol');
+            const valueInput = document.getElementById('addValue');
+            const btn = document.getElementById('addBtn');
+            
+            const symbol = symbolInput.value.toUpperCase().trim();
+            const value = parseFloat(valueInput.value);
+
+            if (!symbol || isNaN(value)) {
+                alert("Please enter a valid Symbol and Fixed Value.");
+                return;
+            }
+
+            const payload = {
+                id: Date.now().toString(),
+                symbol: symbol,
+                fixedValue: value,
+                direction: 'LONG'
+            };
+
+            btn.innerText = "SAVING...";
+
+            try {
+                await fetch('/api/targets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                symbolInput.value = '';
+                valueInput.value = '';
+                btn.innerText = "SAVE TO DATABASE";
+                
+                await fetchDatabase(); // Refresh UI
+            } catch (err) {
+                alert("Database Error");
+                btn.innerText = "SAVE TO DATABASE";
+            }
+        }
+
+        // 3. TOGGLE DIRECTION & SAVE
+        async function setDirection(id, direction) {
+            const coin = activeCoins.find(c => c.id === id);
+            if (!coin) return;
+
+            coin.direction = direction;
+            renderGrid(); // Visual instant update
+            calculateLive(id); // Recalculate if there's text
+
+            // Sync to DB in background
+            await fetch('/api/targets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(coin)
+            });
+        }
+
+        // 4. DELETE FROM DATABASE
+        async function deleteCoin(id) {
+            if (!confirm("Remove this setup from the database?")) return;
+            try {
+                await fetch(`/api/targets/${id}`, { method: 'DELETE' });
+                await fetchDatabase(); 
+            } catch (err) {
+                alert("Failed to delete.");
+            }
+        }
+
+        // 5. REAL-TIME MATH ENGINE (Runs strictly client-side for zero latency)
+        function calculateLive(id) {
+            const coin = activeCoins.find(c => c.id === id);
+            const entryInput = document.getElementById(`entry_${id}`);
+            const resultDisplay = document.getElementById(`result_${id}`);
+
+            if (!coin || !entryInput || !resultDisplay) return;
+
+            const entryPrice = parseFloat(entryInput.value);
+
+            if (isNaN(entryPrice)) {
+                resultDisplay.innerText = "---";
+                resultDisplay.className = "text-2xl font-bold font-mono text-slate-500";
+                return;
+            }
+
+            let result = 0;
+            if (coin.direction === 'LONG') {
+                result = entryPrice - coin.fixedValue;
+                resultDisplay.className = "text-2xl font-bold font-mono text-emerald-400";
+            } else {
+                result = entryPrice + coin.fixedValue;
+                resultDisplay.className = "text-2xl font-bold font-mono text-rose-400";
+            }
+
+            resultDisplay.innerText = result.toFixed(2); 
+        }
+
+        // 6. RENDER THE HTML
+        function renderGrid() {
+            const grid = document.getElementById('calcGrid');
+            grid.innerHTML = '';
+
+            if (activeCoins.length === 0) {
+                grid.innerHTML = `<p class="text-slate-500 italic col-span-full text-sm">Add a setup above to start calculating...</p>`;
+                return;
+            }
+
+            activeCoins.forEach(coin => {
+                const cardHTML = `
+                    <div class="card p-5 relative overflow-hidden group">
+                        <div class="flex justify-between items-start mb-4">
+                            <div>
+                                <h2 class="text-xl font-black text-white tracking-wider flex items-center gap-2">
+                                    ${coin.symbol}
+                                    <button onclick="deleteCoin('${coin.id}')" class="delete-btn text-slate-600 px-1 text-sm pb-1" title="Delete">✖</button>
+                                </h2>
+                                <p class="text-[0.65rem] text-slate-400 mt-0.5 uppercase tracking-wide">Fixed Offset: <span class="text-sky-400 font-bold">${coin.fixedValue}</span></p>
+                            </div>
+                            
+                            <div class="toggle-container w-32 shrink-0">
+                                <div onclick="setDirection('${coin.id}', 'LONG')" class="toggle-btn ${coin.direction === 'LONG' ? 'active-long' : ''}">LONG</div>
+                                <div onclick="setDirection('${coin.id}', 'SHORT')" class="toggle-btn ${coin.direction === 'SHORT' ? 'active-short' : ''}">SHORT</div>
+                            </div>
+                        </div>
+
+                        <div class="bg-slate-900/50 p-4 rounded-lg border border-slate-700/50">
+                            <label class="text-[0.65rem] font-bold text-slate-400 uppercase tracking-wider mb-2 block">Live Entry Price</label>
+                            <input type="number" id="entry_${coin.id}" step="any" oninput="calculateLive('${coin.id}')" 
+                                   class="custom-input font-mono text-lg mb-4 text-white placeholder-slate-700" placeholder="0.00">
+                            
+                            <div class="flex justify-between items-center border-t border-slate-700/50 pt-3">
+                                <span class="text-xs font-bold text-slate-400 uppercase">Target Result</span>
+                                <span id="result_${coin.id}" class="text-2xl font-bold font-mono text-slate-500">---</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                grid.insertAdjacentHTML('beforeend', cardHTML);
+            });
+        }
+
+        // Initialize
+        window.onload = fetchDatabase;
+    </script>
+</body>
+</html>
