@@ -1,0 +1,14 @@
+{
+  "name": "target-calculator-server",
+  "version": "1.0.0",
+  "description": "Cloud-synced dynamic target calculator",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "redis": "^4.6.10"
+  }
+}
